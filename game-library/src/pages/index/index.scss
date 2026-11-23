@@ -1,0 +1,54 @@
+.page {
+  padding: 32px;
+
+  &-header {
+    margin-bottom: 32px;
+  }
+
+  &-title {
+    font-size: 48px;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  &-subtitle {
+    font-size: 26px;
+    color: #888;
+  }
+}
+
+.section {
+  margin-bottom: 48px;
+
+  &-title {
+    font-size: 32px;
+    font-weight: 600;
+    margin-bottom: 16px;
+  }
+}
+
+.empty-hint {
+  padding: 48px 0;
+  text-align: center;
+  color: #aaa;
+  font-size: 26px;
+}
+
+.game-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.game-card {
+  background: #f6f6f6;
+  border-radius: 12px;
+  padding: 24px;
+  min-height: 200px;
+
+  &__name {
+    font-size: 28px;
+    font-weight: 500;
+  }
+}
