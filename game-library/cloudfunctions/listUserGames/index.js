@@ -1,47 +1,51 @@
 // listUserGames - 当前用户的游戏记录列表
-// M2 依赖的读取接口，先用 db 权限 "仅创建者可读写" 过滤
 const { cloud } = require('wx-server-sdk')
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
-const db = cloud.database()
-const userGamesCol = db.collection('user_games')
-const gamesCol = db.collection('games')
+var db = cloud.database()
+var userGamesCol = db.collection('user_games')
+var gamesCol = db.collection('games')
 
-exports.main = async (event) => {
-  const { OPENID } = cloud.getWXContext()
-  const { status } = event
-
-  if (!OPENID) {
-    return { code: 40101, message: 'not logged in', data: [] }
-  }
-
+exports.main = async function (event) {
   try {
-    const query = { _openid: OPENID }
-    if (status) query.status = status
+    var wxContext = cloud.getWXContext()
+    var OPENID = wxContext.OPENID
+    if (!OPENID) {
+      return { code: 40101, message: 'not logged in', data: [] }
+    }
 
-    const res = await userGamesCol.where(query).orderBy('updated_at', 'desc').limit(100).get()
+    var query = { _openid: OPENID }
+    if (event.status) query.status = event.status
+
+    var res = await userGamesCol.where(query).orderBy('updated_at', 'desc').limit(100).get()
 
     // 补游戏元信息
-    const gameIds = [...new Set(res.data.map((r) => r.game_id).filter(Boolean))]
-    let gameMap = {}
+    var gameIds = []
+    for (var i = 0; i < res.data.length; i++) {
+      if (res.data[i].game_id) gameIds.push(res.data[i].game_id)
+    }
+    var gameMap = {}
     if (gameIds.length > 0) {
-      // _id 过滤最多 20 个，分批
-      const chunkSize = 20
-      for (let i = 0; i < gameIds.length; i += chunkSize) {
-        const chunk = gameIds.slice(i, i + chunkSize)
-        const gRes = await gamesCol.where({ _id: db.command.in(chunk) }).get()
-        for (const g of gRes.data) gameMap[g._id] = g
+      var chunks = []
+      for (var j = 0; j < gameIds.length; j += 20) chunks.push(gameIds.slice(j, j + 20))
+      for (var k = 0; k < chunks.length; k++) {
+        var gRes = await gamesCol.where({ _id: db.command.in(chunks[k]) }).get()
+        for (var m = 0; m < gRes.data.length; m++) {
+          gameMap[gRes.data[m]._id] = gRes.data[m]
+        }
       }
     }
 
-    const list = res.data.map((r) => ({
-      ...r,
-      game: gameMap[r.game_id] || null
-    }))
+    var list = []
+    for (var n = 0; n < res.data.length; n++) {
+      var item = res.data[n]
+      item.game = gameMap[item.game_id] || null
+      list.push(item)
+    }
 
     return { code: 0, message: 'ok', data: list }
   } catch (err) {
     console.error('[listUserGames] fatal:', err)
-    return { code: 50001, message: err.message || 'internal error', data: [] }
+    return { code: 50001, message: err && err.message ? err.message : 'internal', data: [] }
   }
 }

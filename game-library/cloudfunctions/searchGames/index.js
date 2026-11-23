@@ -1,5 +1,5 @@
 // searchGames - 游戏搜索与列表
-// M1 实现：先查本地 games，空时回源 RAWG，归一化后 upsert，返回投影字段
+// M1 简化版：本地查 → RAWG 回源 → 归一化 upsert，封面先跳过存储
 const { cloud } = require('wx-server-sdk')
 const https = require('https')
 const http = require('http')
@@ -11,197 +11,144 @@ const _ = db.command
 const gamesCol = db.collection('games')
 
 const RAWG_API_BASE = 'https://api.rawg.io/api'
-const PROJECTION = {
-  _id: true,
-  name: true,
-  slug: true,
-  summary: true,
-  first_release_date: true,
-  genres: true,
-  metacritic_score: true,
-  rating: true,
-  cover_file_id: true
-}
 
-// ========== RAWG HTTP 请求 ==========
-function rawgGet(path, query = {}) {
+// RAWG HTTP 请求
+function rawgGet(path, query) {
+  query = query || {}
   return new Promise((resolve, reject) => {
     const key = process.env.RAWG_API_KEY
     if (!key) {
-      return reject(new Error('RAWG_API_KEY env missing'))
+      return reject(new Error('RAWG_API_KEY missing'))
     }
-    const qs = new URLSearchParams({ key, ...query }).toString()
-    const fullUrl = `${RAWG_API_BASE}${path}?${qs}`
+    const qs = new URLSearchParams(Object.assign({ key: key }, query)).toString()
+    const fullUrl = RAWG_API_BASE + path + '?' + qs
     const parsed = url.parse(fullUrl)
-    const options = {
+    const mod = parsed.protocol === 'https:' ? https : http
+    const req = mod.request({
       hostname: parsed.hostname,
       path: parsed.path + (parsed.search || ''),
       method: 'GET',
       headers: { 'User-Agent': 'game-library-miniapp/1.0' },
       timeout: 8000
-    }
-    const mod = parsed.protocol === 'https:' ? https : http
-    const req = mod.request(options, (res) => {
-      let data = ''
-      res.on('data', (chunk) => (data += chunk))
-      res.on('end', () => {
+    }, function (res) {
+      var data = ''
+      res.on('data', function (chunk) { data += chunk })
+      res.on('end', function () {
         try {
           resolve({ status: res.statusCode, body: JSON.parse(data) })
         } catch (e) {
-          reject(new Error('RAWG response parse fail: ' + data.slice(0, 200)))
+          reject(new Error('RAWG parse fail'))
         }
       })
     })
     req.on('error', reject)
-    req.on('timeout', () => req.destroy(new Error('RAWG timeout')))
+    req.on('timeout', function () { req.destroy(new Error('RAWG timeout')) })
     req.end()
   })
 }
 
-// ========== RAWG → 本地游戏文档 ==========
+// RAWG → 本地文档
 function normalizeRawgGame(raw) {
-  const genres = (raw.genres || []).map((g) => g.name).filter(Boolean)
-  const platforms = (raw.platforms || []).map((p) => p.platform && p.platform.name).filter(Boolean)
-  const coverUrl = raw.background_image || null
-
   return {
     rawg_id: raw.id,
     slug: raw.slug,
     name: raw.name,
     summary: raw.description_raw || '',
-    first_release_date: raw.released ? Math.floor(new Date(raw.released).getTime() / 1000) : undefined,
-    genres,
-    platforms,
-    developers: (raw.developers || []).map((d) => d.name),
-    publishers: (raw.publishers || []).map((p) => p.name),
-    metacritic_score: raw.metacritic || undefined,
-    rating: raw.rating || undefined,
-    cover_url: coverUrl,
+    first_release_date: raw.released ? Math.floor(new Date(raw.released).getTime() / 1000) : null,
+    genres: (raw.genres || []).map(function (g) { return g.name }),
+    platforms: (raw.platforms || []).map(function (p) { return p.platform && p.platform.name }).filter(Boolean),
+    developers: (raw.developers || []).map(function (d) { return d.name }),
+    publishers: (raw.publishers || []).map(function (p) { return p.name }),
+    metacritic_score: raw.metacritic || null,
+    rating: raw.rating || null,
+    cover_url: raw.background_image || null,
     status: raw.tba ? 'upcoming' : 'released',
     source_updated_at: Math.floor(Date.now() / 1000)
   }
 }
 
-// ========== upsert 到 games 集合（按 slug 唯一） ==========
+// upsert
 async function upsertGame(doc) {
   if (!doc.slug) return null
-  const existing = await gamesCol.where({ slug: doc.slug }).limit(1).get()
-  const now = Math.floor(Date.now() / 1000)
-  const base = { ...doc, updated_at: now }
+  var existing = await gamesCol.where({ slug: doc.slug }).limit(1).get()
+  var now = Math.floor(Date.now() / 1000)
   if (existing.data.length > 0) {
-    const id = existing.data[0]._id
-    delete base._id
-    await gamesCol.doc(id).update({ data: base })
-    return { _id: id, ...base }
+    var id = existing.data[0]._id
+    delete doc._id
+    await gamesCol.doc(id).update({ data: Object.assign({}, doc, { updated_at: now }) })
+    return Object.assign({ _id: id }, doc, { updated_at: now })
   } else {
-    base.created_at = now
-    const res = await gamesCol.add({ data: base })
-    return { _id: res._id, ...base }
+    var res = await gamesCol.add({ data: Object.assign({}, doc, { created_at: now, updated_at: now }) })
+    return Object.assign({ _id: res._id }, doc, { created_at: now, updated_at: now })
   }
 }
 
-// ========== 封面从 RAWG URL 下载并转存云存储 ==========
-async function saveCoverToStorage(rawgCoverUrl, slug) {
-  if (!rawgCoverUrl || !slug) return null
-  // 先查是否已有同 slug 的封面
-  const existing = await db.collection('covers').where({ slug }).limit(1).get().catch(() => null)
-  if (existing && existing.data.length > 0) {
-    return existing.data[0].file_id
-  }
+// 封面下载存云存储
+async function saveCover(rawUrl, slug) {
+  if (!rawUrl || !slug) return null
   try {
-    const res = await cloud.downloadFile({ fileID: `cloud://placeholder` }).catch(() => null)
-    // 用 HTTP 下载
-    const fileRes = await new Promise((resolve, reject) => {
-      https.get(rawgCoverUrl, (r) => {
-        const chunks = []
-        r.on('data', (c) => chunks.push(c))
-        r.on('end', () => resolve(Buffer.concat(chunks)))
+    var fileRes = await new Promise(function (resolve, reject) {
+      https.get(rawUrl, function (r) {
+        var chunks = []
+        r.on('data', function (c) { chunks.push(c) })
+        r.on('end', function () { resolve(Buffer.concat(chunks)) })
         r.on('error', reject)
       }).on('error', reject)
     })
-    const upload = await cloud.uploadFile({
-      cloudPath: `covers/${slug}.jpg`,
-      fileContent: fileRes
-    })
+    var upload = await cloud.uploadFile({ cloudPath: 'covers/' + slug + '.jpg', fileContent: fileRes })
     return upload.fileID
   } catch (e) {
-    console.warn('[saveCoverToStorage] failed:', e.message)
+    console.warn('[saveCover] fail:', e.message)
     return null
   }
 }
 
-// ========== 主入口 ==========
-exports.main = async (event) => {
-  const { keyword = '', genre, platform, sort, pageSize = 20, cursor } = event
-
+exports.main = async function (event) {
   try {
+    var keyword = event.keyword || ''
+    var genre = event.genre
+    var pageSize = event.pageSize || 20
+
     // 1. 本地查询
-    const localQuery = {}
+    var localQuery = {}
     if (keyword) {
       localQuery.name = db.RegExp({ regexp: keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), options: 'i' })
     }
     if (genre) localQuery.genres = genre
-    if (platform) localQuery.platforms = platform
 
-    let localRes
-    if (cursor) {
-      const after = JSON.parse(cursor)
-      localRes = await gamesCol
-        .where(localQuery)
-        .orderBy('updated_at', 'desc')
-        .orderBy('_id', 'asc')
-        .where(_.or([
-          _.and([{ updated_at: _.lt(after.updated_at) }]),
-          _.and([{ updated_at: _.eq(after.updated_at) }, { _id: _.gt(after._id) }])
-        ]))
-        .limit(pageSize)
-        .get()
-    } else {
-      localRes = await gamesCol.where(localQuery).orderBy('updated_at', 'desc').limit(pageSize).get()
-    }
+    var localRes = await gamesCol.where(localQuery).orderBy('updated_at', 'desc').limit(pageSize).get()
+    var list = localRes.data
 
-    let list = localRes.data
-
-    // 2. 本地不足 → 回源 RAWG
-    if (list.length === 0 || list.length < pageSize) {
+    // 2. 本地空 → 回源 RAWG
+    if (list.length === 0) {
       try {
-        const rawgQuery = { page_size: pageSize, ordering: sort === 'popular' ? '-rating' : '-added' }
+        var rawgQuery = { page_size: pageSize, ordering: '-added' }
         if (keyword) rawgQuery.search = keyword
         if (genre) rawgQuery.genres = genre
-        if (platform) rawgQuery.platforms = platform
-        const rawgRes = await rawgGet('/games', rawgQuery)
+        var rawgRes = await rawgGet('/games', rawgQuery)
 
-        if (rawgRes.status === 200 && rawgRes.body.results) {
-          const upserted = []
-          for (const raw of rawgRes.body.results) {
-            const doc = normalizeRawgGame(raw)
-            // 异步存封面，不阻塞
-            saveCoverToStorage(doc.cover_url, doc.slug).then((fileID) => {
-              if (fileID) {
-                gamesCol.where({ slug: doc.slug }).get().then((r) => {
-                  if (r.data[0]) gamesCol.doc(r.data[0]._id).update({ data: { cover_file_id: fileID } })
-                }).catch(() => {})
+        if (rawgRes.status === 200 && rawgRes.body && rawgRes.body.results) {
+          for (var i = 0; i < rawgRes.body.results.length; i++) {
+            var raw = rawgRes.body.results[i]
+            var doc = normalizeRawgGame(raw)
+            var saved = await upsertGame(doc)
+            if (saved) list.push(saved)
+            // 异步存封面
+            saveCover(doc.cover_url, doc.slug).then(function (fileID) {
+              if (fileID && saved) {
+                gamesCol.doc(saved._id).update({ data: { cover_file_id: fileID } }).catch(function () {})
               }
-            }).catch(() => {})
-            const saved = await upsertGame(doc)
-            if (saved) upserted.push({ _id: saved._id, name: saved.name, slug: saved.slug, genres: saved.genres, metacritic_score: saved.metacritic_score, cover_file_id: saved.cover_file_id })
+            }).catch(function () {})
           }
-          if (list.length === 0) list = upserted
-          else list = [...list, ...upserted].slice(0, pageSize)
         }
       } catch (rawgErr) {
-        console.warn('[searchGames] RAWG fallback failed:', rawgErr.message)
+        console.warn('[searchGames] RAWG fail:', rawgErr.message)
       }
     }
 
-    // 3. 游标
-    const nextCursor = list.length >= pageSize
-      ? JSON.stringify({ updated_at: list[list.length - 1].updated_at || 0, _id: list[list.length - 1]._id })
-      : undefined
-
-    return { code: 0, message: 'ok', data: { list, nextCursor } }
+    return { code: 0, message: 'ok', data: { list: list, nextCursor: undefined } }
   } catch (err) {
     console.error('[searchGames] fatal:', err)
-    return { code: 50001, message: err.message || 'internal error', data: null }
+    return { code: 50001, message: err && err.message ? err.message : 'internal', data: null }
   }
 }
