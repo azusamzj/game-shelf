@@ -136,7 +136,7 @@ exports.main = async (event) => {
 
   try {
     // 1. 本地查询
-    const localQuery: any = {}
+    const localQuery = {}
     if (keyword) {
       localQuery.name = db.RegExp({ regexp: keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), options: 'i' })
     }
@@ -165,7 +165,7 @@ exports.main = async (event) => {
     // 2. 本地不足 → 回源 RAWG
     if (list.length === 0 || list.length < pageSize) {
       try {
-        const rawgQuery: any = { page_size: pageSize, ordering: sort === 'popular' ? '-rating' : '-added' }
+        const rawgQuery = { page_size: pageSize, ordering: sort === 'popular' ? '-rating' : '-added' }
         if (keyword) rawgQuery.search = keyword
         if (genre) rawgQuery.genres = genre
         if (platform) rawgQuery.platforms = platform

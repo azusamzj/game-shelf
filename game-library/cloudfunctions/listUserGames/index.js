@@ -16,7 +16,7 @@ exports.main = async (event) => {
   }
 
   try {
-    const query: any = { _openid: OPENID }
+    const query = { _openid: OPENID }
     if (status) query.status = status
 
     const res = await userGamesCol.where(query).orderBy('updated_at', 'desc').limit(100).get()
