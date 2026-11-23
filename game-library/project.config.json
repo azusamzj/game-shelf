@@ -1,0 +1,18 @@
+{
+  "miniprogramRoot": "./dist",
+  "cloudfunctionRoot": "./cloudfunctions",
+  "projectname": "game-library",
+  "description": "游迹册 - 个人游戏记录与收藏",
+  "appid": "wx0219ada23ccc9d01",
+  "setting": {
+    "urlCheck": false,
+    "es6": false,
+    "enhance": false,
+    "compileHotReLoad": false,
+    "postcss": false,
+    "minified": false,
+    "bigPackageSizeSupport": true
+  },
+  "compileType": "miniprogram",
+  "cloudfunctionTemplateRoot": "./cloudfunctions"
+}

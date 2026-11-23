@@ -1,0 +1,9 @@
+{
+  "name": "ping",
+  "version": "1.0.0",
+  "description": "连通性测试",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

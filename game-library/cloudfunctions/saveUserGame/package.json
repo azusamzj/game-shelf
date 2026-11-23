@@ -1,0 +1,9 @@
+{
+  "name": "saveUserGame",
+  "version": "1.0.0",
+  "description": "保存用户游戏记录",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}
