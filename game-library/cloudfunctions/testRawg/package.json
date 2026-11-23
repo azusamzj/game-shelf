@@ -1,0 +1,9 @@
+{
+  "name": "testRawg",
+  "version": "1.0.0",
+  "description": "RAWG API 连通性测试",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}
